@@ -163,6 +163,7 @@ if __name__ == '__main__':
     parser.add_argument('--storagePen', default=4, help='storage penetration percentage times 10')
     parser.add_argument('--solarPen', default=6, help='solar penetration percentage times 10')
     parser.add_argument('--Qcap', default=-0.79, help='power injection in ppc file name')
+    parser.add_argument('--evPen', default=4, help='EV penetration percentage times 10')
 
     FLAGS, unparsed = parser.parse_known_args()
     print('running with arguments: ({})'.format(FLAGS))
@@ -170,10 +171,11 @@ if __name__ == '__main__':
     train = int(FLAGS.train)
     storagePen = float(FLAGS.storagePen) / 10
     solarPen = float(FLAGS.solarPen) / 10
+    evPen = float(FLAGS.evPen) / 10
     Qcap = FLAGS.Qcap
 
     # specify load data file information
-    fName = 'data/demand_solStor'+ str(solarPen) + str(storagePen) +'.npz'
+    fName = 'data/demand_solStorEV'+ str(solarPen) + str(storagePen) + str(evPen) +'.npz'
     ppc_name = 'data/case123_ppc_reg_pq'+str(Qcap) + '.npy'
     # ppc_name = 'data/case123_ppc_none.npy'  # this is the data when voltage regulators are 0
     presampleIdx = 168 - 1 # first week as training data for forecasters/PF models/other
@@ -215,7 +217,7 @@ if __name__ == '__main__':
     # print(X.shape)
 
     if train == 1:
-        print('if')
+        print('training')
         coefs_mat, intercept_mat = main(X, voltage_array, presampleIdx)
         save_name = 'data/SVR_coeffs_solStor'+ str(l_data['solarPen']) + str(l_data['storagePen']) + 'ppc_reg_pq-0.79.npz'
         np.savez(save_name,
@@ -226,7 +228,7 @@ if __name__ == '__main__':
         print('saved to', save_name)
 
     else:
-        print('else')
+        print('not training')
         load_name = 'data/SVR_coeffs_solStor'+ str(0.0) + str(0.0) + 'ppc_reg_pq-0.79.npz'
         model_data = np.load(load_name)
         coefs_mat = model_data['coefs_mat']

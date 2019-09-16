@@ -7,6 +7,8 @@ import matplotlib.pyplot as plt
 
 JULY_DAYS = 31
 JUNE_DAYS = 30
+# evPen = 5, future buffer = 2.1, fast charge buffer = 3.1: daily car energy = 6000
+
 
 class Resampling:  # resamples data to proper time resolution
     def __init__(self, data, t, tnew):
@@ -48,7 +50,7 @@ class Resampling:  # resamples data to proper time resolution
 
 
 
-def setStorageSolar(pDemandFull, sNormFull, storagePen, solarPen, nodesPen, rootIdx):
+def setStorageSolar(pDemandFull, sNormFull, storagePen, solarPen, nodesPen, rootIdx, daily_car_energy):
     """
     Inputs: pDemandFull - full matrix of real power demanded (nodes X time)
         sNormFull - full matrix of normalized solar data to be scaled and added to power demanded
@@ -70,8 +72,9 @@ def setStorageSolar(pDemandFull, sNormFull, storagePen, solarPen, nodesPen, root
 
     # Assign solar
     loadSNodes = np.mean(pDemandFull[nodesStorage, :], 1)
-    rawSolar = solarPen*sum(np.mean(pDemandFull, 1))
-    rawStorage = storagePen*24*sum(np.mean(pDemandFull, 1))
+    rawSolar = solarPen * (sum(np.mean(pDemandFull, 1)) + daily_car_energy/24)
+    rawStorage = storagePen * (24*sum(np.mean(pDemandFull, 1)) + daily_car_energy)
+    print('average network power', sum(np.mean(pDemandFull, 1)))
     alphas = loadSNodes/sum(loadSNodes)
     alphas = alphas.reshape(alphas.shape[0], 1)
     netDemandFull = pDemandFull
@@ -87,6 +90,10 @@ def setStorageSolar(pDemandFull, sNormFull, storagePen, solarPen, nodesPen, root
     # sGenFull is the full solar generation for all the nodes that were assigned storage.
     # sNormFull represents the shape of the solar generation over time.
     sGenFull = np.dot(portionSolarPerNode, sNormFull)
+    # print(len(nodesLoad))
+    # print(len(alphas))
+    # print('s norm', sNormFull[:,5:20])
+    # print(portionSolarPerNode)
     # We then select only the first two months of solar data.
     sGenFull = sGenFull[:, :(JUNE_DAYS + JULY_DAYS) * 24]
     netDemandFull[nodesStorage, :] = netDemandFull[nodesStorage, :] - sGenFull
@@ -258,6 +265,7 @@ if __name__ == '__main__':
     parser.add_argument('--storagePen', default=4, help='storage penetration percentage times 10')
     parser.add_argument('--solarPen', default=6, help='solar penetration percentage times 10')
     parser.add_argument('--aggregate', default=0, help='boolean for aggregating homes to network')
+    parser.add_argument('--evPen', default=0, help='EV penetration percentage times 10')
 
     FLAGS, unparsed = parser.parse_known_args()
     print('running with arguments: ({})'.format(FLAGS))
@@ -265,11 +273,22 @@ if __name__ == '__main__':
     storagePen = float(FLAGS.storagePen) / 10
     solarPen = float(FLAGS.solarPen) / 10
     seed = int(FLAGS.seed)
+    evPen = float(FLAGS.evPen) / 10
+
+    if evPen == 0.5:
+        print('adding 50% EV penetration to total demand')
+        daily_car_energy = 6000
+    else:
+        daily_car_energy = 6000  # this way the solar is always the same so there are not 2 linked variables
+
 
     np.random.seed(seed)  # set random seed
 
-    nodesPen = np.max((solarPen, storagePen)) + 0.1
-    #nodesPen = 0.9
+    # nodesPen = np.max((solarPen, storagePen)) + 0.1
+    # nodesPen = 0.9
+    solar_per_node = 0.6 # average percentage of self power generation
+    nodesPen = np.clip(np.max((solarPen, storagePen)) / solar_per_node, None, 1.0)
+
     rootIdx = 0
 
     # make raw demand data if not done already
@@ -284,14 +303,17 @@ if __name__ == '__main__':
     rDemandFull = power/2
 
     netDemandFull, sGenFull, nodesStorage, qmin, qmax, umin, umax \
-        = setStorageSolar(power, sr_NormFull, storagePen, solarPen, nodesPen, rootIdx)
+        = setStorageSolar(power, sr_NormFull, storagePen, solarPen, nodesPen, rootIdx, daily_car_energy)
 
-    print("Net demand full: ", netDemandFull)
+    # print("Net demand full: ", netDemandFull[nodesStorage[3],0:24])
+    # print(np.sum(netDemandFull[nodesStorage,0:24], axis=1))
+    # print(np.sum(netDemandFull[:, 0:24], axis=1))
+    # print(np.sum(netDemandFull))
 
-    np.savez('data/demand_solStor' + str(solarPen) + str(storagePen),
+    np.savez('data/demand_solStorEV' + str(solarPen) + str(storagePen) + str(evPen),
              netDemandFull=netDemandFull, sGenFull=sGenFull, nodesStorage=nodesStorage, qmin=qmin, qmax=qmax,
              umin=umin, umax=umax, storagePen=storagePen, solarPen=solarPen, nodesPen=nodesPen,
              rDemandFull=rDemandFull
              )
 
-    print('Saved to', 'demand_' + str(solarPen) + str(storagePen) + '.npz')
+    print('Saved to', 'demand_solStorEV' + str(solarPen) + str(storagePen) + str(evPen) + '.npz')

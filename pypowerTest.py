@@ -2,7 +2,7 @@
 
 # from scipy.io import loadmat
 import numpy as np
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 from pypower.api import runpf, ppoption
 
 import argparse
@@ -13,6 +13,10 @@ def Violation_Process(allVoltage, Vmin, Vmax):
     vLess = (Vmin - allVoltage).clip(min=0)
     vio_plus_sum = np.sum(vGreater, axis=1)  # bus# X sum of all over voltage violations
     vio_min_sum = np.sum(vLess, axis=1)  # bus# X sum of all under voltage violations
+
+    bus_sum_vios = vio_plus_sum + vio_min_sum
+
+    print('bus sum voltage vios', bus_sum_vios)
 
     vio_plus_max = np.max(vGreater)
     vio_min_max = np.max(vLess)
@@ -31,7 +35,7 @@ def Violation_Process(allVoltage, Vmin, Vmax):
 
     vio_when = np.sum(vio_timesbig, axis=0)
 
-    return vio_times, vio_plus_sum, vio_min_sum, vio_when
+    return vio_times, vio_plus_sum, vio_min_sum, vio_when, bus_sum_vios
 
 
 def PF_Sim(ppc, pDemand, rDemand):
@@ -65,7 +69,7 @@ def PF_Sim(ppc, pDemand, rDemand):
     return runVoltage
 
 
-def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
+def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy', final_flag=0):
     print('evaluating file', fName)
 
     try:
@@ -73,7 +77,7 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
     except:
         print('no file found')
         count = 0
-        return np.nan, np.nan, np.nan, np.nan, count, np.nan
+        return np.nan, np.nan, np.nan, np.nan, count, np.nan, np.nan, np.nan
 
     netDemandFull = allData['netDemandFull']
 
@@ -83,21 +87,26 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
     # print(ppc['bus'][[12, 32, 72], 1])
 
     # Define t_idx
-    try:
-        t_idx = allData['t_idx']
-    except:
-        print('no t_idx in data')
+    if final_flag == 0:
         t_idx = netDemandFull.shape[1] - startIdx
+    else:
+        iters = allData['iters']
+        GC_time = allData['GC_time']
+        t_idx = iters * GC_time
 
     # Define Uall and nodesStorage
     try:
-        Uall = allData['Uall']
+        Uall = allData['u_net_final']
+        ev_c_final = allData['ev_c_final']
         nodesStorage = allData['nodesStorage']
         rDemandFull = allData['rDemandFull']
+        load_nodes = allData['load_nodes']
     except:
         Uall = np.zeros(netDemandFull.shape) + 1e-9 # no storage simulation
+        ev_c_final = Uall
         print('no storage info in data')
         nodesStorage = np.arange(netDemandFull.shape[0])
+        load_nodes = nodesStorage
         # ppc['bus'][[12, 32, 72], 3] = [0.02, 0.02, -0.7]
         rDemandFull = ppc['bus'][:, 3]
         # rDemandFull = allData['netDemandFull'] / 2
@@ -106,6 +115,7 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
     # Define pricesFull
     try:
         pricesFull = allData['pricesFull']
+        print(pricesFull[:,0:24])
     except:
         print('no price in data')
         prices = np.hstack(
@@ -128,21 +138,55 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
     # rating = findTransformerSizes(netDemandFull)
     # For solar penetration = 0
     # print('original base case ratings', rating)
-    rating = [2500, 37.5, 37.5, 25, 45, 25, 25, 25, 37.5, 25, 37.5, 45, 45, 15, 45, 45, 45, 45, 37.5, 45, 45, 25, 25,
-              37.5, 37.5, 45, 25, 25, 25, 25, 45, 25, 25, 37.5, 75, 37.5, 37.5, 25, 37.5, 50, 25, 25, 25, 25, 15, 45,
-              45, 100, 37.5, 100, 25, 37.5, 15, 45, 37.5, 45, 45, 100, 45, 37.5, 45, 37.5, 15, 25, 45, 25, 45, 25,
-              37.5, 37.5, 37.5, 37.5, 25, 37.5, 37.5, 45, 25, 45, 45, 37.5, 45, 45, 25, 25, 45, 15]
+    # rating_o = [2500, 37.5, 37.5, 25, 45, 25, 25, 25, 37.5, 25, 37.5, 45, 45, 15, 45, 45, 45, 45, 37.5, 45, 45, 25, 25,
+    #          37.5, 37.5, 45, 25, 25, 25, 25, 45, 25, 25, 37.5, 75, 37.5, 37.5, 25, 37.5, 50, 25, 25, 25, 25, 15, 45,
+    #          45, 100, 37.5, 100, 25, 37.5, 15, 45, 37.5, 45, 45, 100, 45, 37.5, 45, 37.5, 15, 25, 45, 25, 45, 25,
+    #          37.5, 37.5, 37.5, 37.5, 25, 37.5, 37.5, 45, 25, 45, 45, 37.5, 45, 45, 25, 25, 45, 15]
+    # rating = [2500, 37.5, 37.5, 25, 45, 25, 25, 25, 37.5, 25, 37.5, 45, 45, 15, 45, 45, 45, 45, 37.5, 45, 45, 25, 25,
+    #             37.5, 37.5, 45, 25, 25, 25, 25, 45, 25, 25, 37.5, 75, 45, 37.5, 25, 37.5, 50, 25, 25, 25, 25, 15, 45,
+    #             45, 100, 37.5, 100, 25, 37.5, 15, 45, 37.5, 45, 45, 100, 45, 37.5, 45, 37.5, 15, 25, 45, 25, 45, 25,
+    #             37.5, 37.5, 37.5, 45, 25, 37.5, 37.5, 45, 25, 45, 45, 37.5, 45, 45, 25, 25, 45, 15]
+    # rating = [2500, 45, 50, 30, 50, 30, 30, 30, 45, 30, 50, 50, 50, 25, 45, 50, 50, 50, 45, 45, 50, 30, 30, 45, 50, 50,
+    #          30, 30, 25, 30, 50, 30, 30, 45, 100, 45, 45, 30, 45, 50, 30, 30, 30, 30, 25, 45, 75, 112.5, 45, 112.5,
+    #          30, 50, 15, 50, 45, 45, 45, 100, 50, 45, 50, 50, 25, 30, 50, 30, 50, 30, 50, 45, 45, 50, 30, 45, 45, 50,
+    #          25, 50, 50, 45, 50, 50, 30, 30, 50, 25]
+    rating = [3000, 45, 45, 30, 50, 30, 30, 30, 45, 30, 45, 50, 50, 25, 50, 50, 50, 50, 45, 50, 50, 30, 30, 45, 45, 50,
+              30, 30, 30, 30, 50, 30, 30, 45, 100, 50, 45, 30, 45, 75, 30, 30, 30, 30, 25, 50, 50, 112.5, 45, 112.5, 30,
+              45, 25, 50, 45, 50, 50, 112.5, 50, 45, 50, 45, 25, 30, 50, 30, 50, 30, 45, 45, 45, 50, 30, 45, 45, 50, 30,
+              50, 50, 45, 50, 50, 30, 30, 50, 25]
+
+
+    # print(np.sum(rating > rating_o))
+    # print(np.where(rating > rating_o))
     # """
-    rating_n, t_cap_vio, sub_t_cap_vio = afterStorageTransformerSizes(netDemandFull, Uall, nodesStorage, t_idx, startIdx, rating)
+
+    rating_n, t_cap_vio, sub_t_cap_vio, max_cap_vios = afterStorageTransformerSizes(netDemandFull, Uall, load_nodes, t_idx, startIdx, rating)
 
     nB, T = netDemandFull.shape
     nS, tt = Uall.shape
 
     # calculate before storage cost of electricity
-    clip_demand = netDemandFull[nodesStorage, startIdx:(startIdx + t_idx)].clip(min=0)
+    clip_demand = (netDemandFull[load_nodes, startIdx:(startIdx + t_idx)] + ev_c_final[:, 0:t_idx]).clip(min=0)
+    # all_demand = clip_demand
     all_demand = np.sum(clip_demand, axis=0)
 
-    cost_pre = np.dot(pricesFull[:, 0:t_idx], all_demand.T)
+    cost_pre = np.dot(pricesFull[:, startIdx:(startIdx + t_idx)], all_demand.T)
+
+    # calculate after storage cost
+    # startIdx += 0
+    clip_demand = (netDemandFull[load_nodes, startIdx:startIdx + t_idx] + Uall[:, 0:t_idx]).clip(min=0)
+    # all_demand = clip_demand
+    all_demand = np.sum(clip_demand, axis=0)
+
+    cost_post = np.dot(pricesFull[:, startIdx:(startIdx + t_idx)], all_demand.T)
+
+    print('before storage cost', cost_pre)
+    print('after storage cost', cost_post)
+    print('cost difference', cost_pre - cost_post)
+
+
+    ################### Make sample plots here ###############
+
 
     # simulate voltages
     allVoltage = np.zeros((nB, t_idx))
@@ -151,18 +195,21 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
 
     # Is this supposed to be:
     # print('nodes storage', nodesStorage)
-    pDemand[nodesStorage, 0:t_idx] += Uall[:, 0:t_idx]
+
+    # can comment this out when evPen=0 and storagePEN=0
+    pDemand[load_nodes, 0:t_idx] += Uall[:, 0:t_idx]
+
     if rDemandFull.size < 2*nB:
         rDemandFull = 1000 * np.tile(rDemandFull.reshape((rDemandFull.size, 1)), (1,t_idx))
 
     for i in range(t_idx):
         allVoltage[:, i] = PF_Sim(ppc, pDemand[:, i], rDemandFull[:, i])
 
-    print('maximum voltages', np.max(allVoltage, axis=1))
-    print('minimum voltages', np.min(allVoltage, axis=1))
-    print('max', np.max(allVoltage))
-    print('min', np.min(allVoltage))
-    vio_times, vio_plus_sum, vio_min_sum, vio_when = Violation_Process(allVoltage, 0.95, 1.05)
+    # print('maximum voltages', np.max(allVoltage, axis=1))
+    # print('minimum voltages', np.min(allVoltage, axis=1))
+    # print('max', np.max(allVoltage))
+    # print('min', np.min(allVoltage))
+    vio_times, vio_plus_sum, vio_min_sum, vio_when, bus_sum_vios = Violation_Process(allVoltage, 0.95, 1.05)
 
     vio_total_square = np.sum(np.square(vio_min_sum + vio_plus_sum))
 
@@ -170,17 +217,9 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
 
     print('vio total square', vio_total_square)
 
-    # calculate after storage cost
-    all_net = netDemandFull[nodesStorage, startIdx:startIdx + t_idx] + Uall[:, 0:t_idx]
-
-    clip_demand = all_net.clip(min=0)
-    all_demand = np.sum(clip_demand, axis=0)
-
-    cost_post = np.dot(pricesFull[:, startIdx:(startIdx + t_idx)], all_demand.T)
-
     print('before storage cost', cost_pre)
     print('after storage cost', cost_post)
-    print('difference', cost_pre - cost_post)
+    print('cost difference', cost_pre - cost_post)
     print('leaf transformer vio', t_cap_vio)
     print('substation transformer vio', sub_t_cap_vio)
 
@@ -188,18 +227,28 @@ def EvaluateResults(fName, startIdx, ppc_name='data/case123_ppc_reg_pv.npy'):
 
     count = 1
 
-    save_name = 'results/results_solStor' + str(allData['solarPen']) + str(allData['storagePen']) + 'ppc_reg_pq-0.79.npz'
+    if final_flag == 0:
+        save_name = 'results/results_solStor' + str(allData['solarPen']) + str(allData['storagePen']) \
+                    + 'ppc_reg_pq-0.79.npz'
+        np.savez(save_name,
+                 vio_total_square=vio_total_square, allVoltage=allVoltage,
+                 cost_savings=cost_savings,
+                 t_cap_vio=t_cap_vio, sub_t_cap_vio=sub_t_cap_vio,
+                 count=count,
+                 t_idx=t_idx)
 
-    np.savez(save_name,
-             vio_total_square=vio_total_square, allVoltage=allVoltage,
-             cost_savings=cost_savings,
-             t_cap_vio=t_cap_vio, sub_t_cap_vio=sub_t_cap_vio,
-             count=count,
-             t_idx=t_idx)
+    else:
+        save_name = 'results/results_solStorEV_f' + str(allData['solarPen']) + str(allData['storagePen']) \
+                    + str(allData['evPen']) + 'ppc_reg_pq-0.79.npz'
+        np.savez(save_name,
+                 vio_total_square=vio_total_square, allVoltage=allVoltage,
+                 cost_savings=cost_savings,
+                 t_cap_vio=t_cap_vio, sub_t_cap_vio=sub_t_cap_vio,
+                 count=count, t_idx=t_idx, max_cap_vios=max_cap_vios, bus_sum_vios=bus_sum_vios)
 
     print('saved to', save_name)
 
-    return vio_total_square, cost_savings, t_cap_vio, sub_t_cap_vio, count, t_idx
+    return vio_total_square, cost_savings, t_cap_vio, sub_t_cap_vio, count, t_idx, max_cap_vios, bus_sum_vios
 
 
 def findTransformerSizes(netDemandFull):
@@ -216,24 +265,27 @@ def findTransformerSizes(netDemandFull):
     max_total = np.max(np.abs(np.sum(netDemandFull, axis=0)))
     print('max total power', max_total)
     rating = []
-    if max_total < 1500:
+    if max_total < 1000:
         rating.append(1500)
-    elif max_total < 2000:
+    elif max_total < 1500:
         rating.append(2000)
+    elif max_total < 2000:
+        rating.append(2500)
     elif max_total < 2500:
-        rating.append(2500)
+        rating.append(3000)
     else:
-        print('max total power greater than 2500 largest transformer')
-        rating.append(2500)
+        print('max total power greater than 3000 largest transformer, just making it 3500')
+        rating.append(3500)
     for c in max_leafs:
         if c < 1e-3:
             continue
         transformers = [5, 7.5, 10, 15, 25, 30, 37.5, 45, 50, 75, 100, 112.5, 150, 167, 225, 300, 500, 750, 1000, 1500,
-                    2000, 2500]
+                    2000, 2500, 3000]
         transformers.append(c)
         transformers.sort()
         idx = np.where(transformers == c)[0]
-        rating.append(transformers[(int(idx) + 1) if (idx.size > 0) else 1])
+        # rating.append(transformers[(int(idx) + 1) if (idx.size > 0) else 1])
+        rating.append(transformers[(int(idx) + 2) if (idx.size > 0) else 1])
         # print('Current transformers vector: ', transformers)
     # print('transformer ratings', rating)
 
@@ -242,24 +294,25 @@ def findTransformerSizes(netDemandFull):
 
 def afterStorageTransformerSizes(netDemandFull, Uall, nodesStorage, t_idx, startIdx, rating_o):
 
-    # Is this line supposed to be
-    netDemandFull[nodesStorage, startIdx:startIdx + t_idx] = netDemandFull[nodesStorage,
+    net_local_copy = netDemandFull.copy()
+
+    net_local_copy[nodesStorage, startIdx:startIdx + t_idx] = net_local_copy[nodesStorage,
                                                              startIdx:(startIdx + t_idx)] + Uall[:, 0:t_idx]
-    netDemandFull = netDemandFull[:, 0:t_idx]
+    net_local_copy = net_local_copy[:, 0:t_idx]
 
-    rating_n = findTransformerSizes(netDemandFull)
+    rating_n = findTransformerSizes(net_local_copy)
 
-    max_consumption = np.max(np.abs(netDemandFull), axis=1)
-    max_total = np.max(np.abs(np.sum(netDemandFull, axis=0)))
+    max_consumption = np.max(np.abs(net_local_copy), axis=1)
+    max_total = np.max(np.abs(np.sum(net_local_copy, axis=0)))
     max_consumption = np.concatenate((np.reshape(np.array(max_total), 1), max_consumption[max_consumption>1e-3]))
     # print('maximum consumption after storage', max_consumption)
 
-    load_nodes = np.where(np.max(netDemandFull,axis=1) > 1e-3)[0]
-    print('percent of leaf transformers with new capacities',
-          np.sum(np.array(rating_n) > np.array(rating_o)) / len(load_nodes))
+    load_nodes = np.where(np.max(net_local_copy,axis=1) > 1e-3)[0]
+    print('number of leaf transformers with new capacities',
+          np.sum(np.array(rating_n) > np.array(rating_o)) )  # / len(load_nodes))
 
-    substation_profile = np.sum(netDemandFull, axis=0)
-    t_demands = np.abs(np.vstack((substation_profile, netDemandFull[load_nodes,:])))
+    substation_profile = np.sum(net_local_copy, axis=0)
+    t_demands = np.abs(np.vstack((substation_profile, net_local_copy[load_nodes,:])))
 
     cap_vios = (t_demands - np.tile(np.array(rating_o).reshape((len(rating_o), 1)), (1,t_demands.shape[1]))).clip(min=0)
     sub_t_cap_vio = np.sum(np.square(cap_vios[0, :]))
@@ -267,10 +320,11 @@ def afterStorageTransformerSizes(netDemandFull, Uall, nodesStorage, t_idx, start
     t_cap_vio = np.sum(np.square(cap_vios)) - sub_t_cap_vio
     # print(t_cap_vio)
 
-    max_cap_vio = np.sum(np.square((max_consumption - np.array(rating_o)).clip(min=0)))
-    print('maximum capacity violation', max_cap_vio)
+    max_cap_vio_sum = np.sum(np.square((max_consumption - np.array(rating_o)).clip(min=0)))
+    max_cap_vio = (max_consumption - np.array(rating_o)).clip(min=0)
+    print('maximum capacity violation per bus', max_cap_vio)
 
-    return rating_n, t_cap_vio, sub_t_cap_vio
+    return rating_n, t_cap_vio, sub_t_cap_vio, max_cap_vio
 
 
 if __name__ == '__main__':
@@ -278,27 +332,49 @@ if __name__ == '__main__':
     parser.add_argument('--seed', default=0, help='random seed')
     parser.add_argument('--storagePen', default=4, help='storage penetration percentage times 10')
     parser.add_argument('--solarPen', default=6, help='solar penetration percentage times 10')
+    parser.add_argument('--evPen', default=4, help='ev penetration percentage times 10')
     parser.add_argument('--Qcap', default=-0.79, help='power injection in ppc file name')
+    parser.add_argument('--bounds', default=1, help='1 for dynamic bounds, 0 for infinite bounds')
+    parser.add_argument('--final', default=1, help='1 for final results evaluation, 0 for SVR training voltages')
 
     FLAGS, unparsed = parser.parse_known_args()
     print('running with arguments: ({})'.format(FLAGS))
     Qcap = FLAGS.Qcap
     storagePen = float(FLAGS.storagePen) / 10
     solarPen = float(FLAGS.solarPen) / 10
+    evPen = float(FLAGS.evPen) / 10
+    bounds_flag = int(FLAGS.bounds)
+    final_flag = int(FLAGS.final)
 
-    if storagePen == 0:
+    if final_flag == 0:
         presampleIdx = 0 - 1
         startIdx = presampleIdx + 1
         print('starting at 0 for training models')
     else:
         presampleIdx = 168 - 1
         startIdx = presampleIdx + 1
+        print('starting at Idx', startIdx)
 
     # names = ['results/PF_orig_sol0.0.npz', 'results/PF_EV_sol0.0.npz', 'results/PF_EVnoScale_sol0.0.npz',
     #         'results/PF_orig_sol0.6.npz', 'results/PF_EV_sol0.6.npz', 'results/PF_EVnoScale_sol0.6.npz']
 
-    # Put the final file name in here (should not be 1 min resolution, but hourly resolution
-    names = ['data/demand_solStor' + str(solarPen) + str(storagePen) + '.npz']
+    # Put the final file name in here (should not be 1 min resolution, but hourly resolution)
+    if final_flag == 0:
+        names = ['data/demand_solStorEV' + str(solarPen) + str(storagePen) + str(evPen) + '.npz']
+    else:
+        names = ['results/boundsLocalAns_solStorEV' + str(solarPen) + str(storagePen) + str(evPen) + \
+                  '_bounds' + str(bounds_flag) + 'ppc_reg_pq-0.79.npz']
+        """
+        names = []
+        for i in range(1, 8):
+            storagePen = i/10.
+            print('storage pen', i)
+            name = 'results/boundsLocalAns_solStorEV' + str(solarPen) + str(storagePen) + str(evPen) + \
+                       '_bounds' + str(bounds_flag) + 'ppc_reg_pq-0.79.npz'
+            names.append(name)
+        """
+
+
 
     # switch these comments to change ppc file
     ppc_name = 'data/case123_ppc_reg_pq'+str(Qcap) + '.npy'
@@ -307,19 +383,43 @@ if __name__ == '__main__':
 
     vio_total_square2 = []
     transformer_capacity_square = []
+    sub_t_cap = []
     arb_prof2 = []
     count2 = []
     t_idxs = []
 
     l = len(names)
 
+    storagePen = 0
     for fName in names:
-        vio_total_square, arb_prof, t_cap_vio, sub_t_cap_vio, count, t_idx = EvaluateResults(fName, startIdx, ppc_name)
+        storagePen += 1
+
+        vio_total_square, arb_prof, t_cap_vio, sub_t_cap_vio, count, t_idx, max_cap_vios, bus_sum_vios = \
+            EvaluateResults(fName, startIdx, ppc_name, final_flag)
+
         t_idxs.append(t_idx)
         vio_total_square2.append(vio_total_square)
         arb_prof2.append(arb_prof)
         transformer_capacity_square.append(t_cap_vio)
+        sub_t_cap.append(sub_t_cap_vio)
         count2.append(count)
+
+        np.savetxt('results/bus_max_cap_' + str(bounds_flag) + '_solStorEV_' + str(solarPen) + str(storagePen) + str(
+            evPen) + '.csv', max_cap_vios)
+        np.savetxt('results/bus_sum_vios_' + str(bounds_flag) + '_solStorEV_' + str(solarPen) + str(storagePen) + str(
+            evPen) + '.csv', bus_sum_vios)
+
+        print('saved bus stats to', 'results/bus_max_cap_' + str(bounds_flag) + '_solStorEV_' + str(solarPen) + str(
+            storagePen) + str(evPen) + '.csv')
+
+        if final_flag == 1:
+            np.savetxt('results/vio_bounds_'+str(bounds_flag)+'_solStorEV_'+str(solarPen)+str(storagePen)+str(evPen)+'.csv', vio_total_square2)
+            np.savetxt('results/arb_bounds_'+str(bounds_flag)+'_solStorEV_'+str(solarPen)+str(storagePen)+str(evPen)+'.csv', arb_prof2)
+            np.savetxt('results/tcap_bounds_' + str(bounds_flag)+'_solStorEV_'+str(solarPen)+str(storagePen)+str(evPen)+'.csv', transformer_capacity_square)
+            np.savetxt('results/subtcap_bounds_' + str(bounds_flag)+'_solStorEV_'+str(solarPen)+str(storagePen)+str(evPen)+'.csv', sub_t_cap)
+            print('SAVED results to CSV')
+        else:
+            print('results not final')
 
     """
     print('t_idxs', t_idxs)

@@ -24,13 +24,18 @@ def assign_cars_to_nodes(spot_loads, total_EVs=1200):
     # print('EVs per node', EVs_per_node)
     # print(np.sum(EVs_per_node))
 
+    garage_threshold = 17
+
     # If there are more than 25 EVs associated to a node, we assume that the node is a garage.
-    garage_ids = np.where(EVs_per_node >= 25)[0]
+    garage_ids = np.where(EVs_per_node >= garage_threshold)[0]
     # print('garage node ids', garage_ids)
 
     # If there are less than 25 EVs associated to a node, we assume that the node is a home.
-    home_ids = np.where(EVs_per_node <= 25)[0]
+    home_ids = np.where(EVs_per_node <= garage_threshold)[0]
     # print('home node ids', home_ids)
+
+    print('cars in fast chargers', np.sum(EVs_per_node[garage_ids]))
+    print('cars in home chargers', np.sum(EVs_per_node[home_ids]))
 
     return EVs_per_node, garage_ids, home_ids
 
@@ -56,11 +61,12 @@ def initialize_dictionaries(nodes=85, days=31):
 # We assign the cars that are not charged an any point during the day to home_ids.
 # These cars are irrelevant to our calculations though, so we use remove_invalid to ignore them.
 def remove_invalid(np_array):
-    np_array = np_array[np_array < 240]
+    np_array = np_array[np_array < 1000]
     return np_array
 
 
-def assign_data_to_nodes(garage_ids, home_ids, EVs_per_node, start_times, end_times, charge, start_dict, end_dict, charge_dict):
+def assign_data_to_nodes(garage_ids, home_ids, EVs_per_node, start_times, end_times, charge, start_dict, end_dict,
+                         charge_dict, fast_charge_buffer=3.1):
     # split EV samples to garages and homes
     # We assume that cars that start being charged before 10 am are in garages.
 
@@ -78,29 +84,40 @@ def assign_data_to_nodes(garage_ids, home_ids, EVs_per_node, start_times, end_ti
 
     start_times_g = start_times[g_ids]
     end_times_g = end_times[g_ids]
-    charge_g = charge[g_ids]
+    charge_g = fast_charge_buffer * charge[g_ids]
+    # print('garage charge', charge_g)
 
     start_times_h = start_times[h_ids]
     end_times_h = end_times[h_ids]
     charge_h = charge[h_ids]
+    # print('home charge', charge_h)
 
     #print(start_times_g)
     #print(start_times_h)
     #print(kdkd)
+
+    total_energy = 0
 
     EV_count = 0
     for id in garage_ids:
         start_dict[id].append( remove_invalid(start_times_g[EV_count:EV_count + EVs_per_node[id]]) )
         end_dict[id].append( remove_invalid(end_times_g[EV_count:EV_count + EVs_per_node[id]]) )
         charge_dict[id].append( remove_invalid(charge_g[EV_count:EV_count + EVs_per_node[id]]) )
-        EV_count += EVs_per_node[id]
+        EV_count += len(remove_invalid(charge_g[EV_count:EV_count + EVs_per_node[id]]))
+        total_energy += np.sum(remove_invalid(charge_g[EV_count:EV_count + EVs_per_node[id]]))
+    # print('evs in garages', EV_count)
+    # print('garage charge', charge_dict[id])
 
     EV_count = 0
     for id in home_ids:
         start_dict[id].append( remove_invalid(start_times_h[EV_count:EV_count + EVs_per_node[id]]) )
         end_dict[id].append( remove_invalid(end_times_h[EV_count:EV_count + EVs_per_node[id]]) )
         charge_dict[id].append( remove_invalid(charge_h[EV_count:EV_count + EVs_per_node[id]]) )
-        EV_count += EVs_per_node[id]
+        EV_count += len(remove_invalid(charge_h[EV_count:EV_count + EVs_per_node[id]]))
+        total_energy += np.sum(remove_invalid(charge_h[EV_count:EV_count + EVs_per_node[id]]))
+    # print('evs in homes', EV_count)
+    # print('home charge', charge_dict[id])
+    print('total daily energy', total_energy)
 
     return start_dict, end_dict, charge_dict
 
@@ -126,13 +143,14 @@ def get_number_of_events(GMM_cars, n_EV, p=.3):
     return cars
 
 def get_start_times(GMM_start, n_EV, cars):
-    start_times = np.zeros(n_EV) + 1000 # initialize values to -10 so negative numbers are automatically excluded
+    start_times = np.zeros(n_EV) + 10000  # initialize values to large so automatically excluded
 
-    # generate samples from GMM
-    start_times[cars] = GMM_start.sample(cars.size)[0].flatten()
-    # print(start_times)
+    if cars.size > 0:
+        # generate samples from GMM
+        start_times[cars] = GMM_start.sample(cars.size)[0].flatten()
+        #print(type(start_times))
 
-    start_times = np.abs(start_times) # remove occasional negatives in a way that doesnt stack 0
+        start_times = np.abs(start_times) # remove occasional negatives in a way that doesnt stack 0
 
     if np.any(start_times < 0):
         print('negative start time', start_times[start_times < 0])
@@ -142,33 +160,33 @@ def get_start_times(GMM_start, n_EV, cars):
 
 def get_initial_soc(GMM_init_soc, n_EV, cars):
     # same thing as get_start_times, but with initial soc
-    initialSoC = np.zeros(n_EV) + 1000
+    initialSoC = np.zeros(n_EV) + 10000
 
-    # generate samples from GMM
-    initialSoC[cars] = GMM_init_soc.sample(cars.size)[0].flatten()
-    # print(start_times)
+    if cars.size > 0:
+        # generate samples from GMM
+        initialSoC[cars] = GMM_init_soc.sample(cars.size)[0].flatten()
 
     return initialSoC
 
 
 def get_final_soc(GMM_final_soc, n_EV, cars):
     # same thing as get_start_times, but with final soc
-    finalSoC = np.zeros(n_EV) + 1000
+    finalSoC = np.zeros(n_EV) + 10000
 
-    # generate samples from GMM
-    finalSoC[cars] = GMM_final_soc.sample(cars.size)[0].flatten()
-    # print(start_times)
+    if cars.size > 0:
+        # generate samples from GMM
+        finalSoC[cars] = GMM_final_soc.sample(cars.size)[0].flatten()
 
     return finalSoC
 
-def get_charge_duration(inital_soc, final_soc, n_EV, cars, t_res, power=3.6, buffer=1.5):
+def get_charge_duration(inital_soc, final_soc, n_EV, cars, t_res, power=8, buffer=1.5, future_charge_buffer=2.2, fast_charge_buffer=3.1):
     # calculate charge duration for each car
-    charge = np.zeros(n_EV) + 1000
+    charge = np.zeros(n_EV) + 10000
 
-    charge[cars] = np.abs(final_soc[cars] - inital_soc[cars])
+    charge[cars] = future_charge_buffer * np.abs(final_soc[cars] - inital_soc[cars])
     # print(charge)
 
-    duration = np.array(np.ceil(charge / power * buffer), dtype=int)
+    duration = np.array(np.ceil(fast_charge_buffer * charge / power * buffer), dtype=int)
     # duration = np.array(np.ceil(charge / power / t_res * buffer), dtype=int)
     # print(duration)
     if np.any(duration < 1):
@@ -178,13 +196,14 @@ def get_charge_duration(inital_soc, final_soc, n_EV, cars, t_res, power=3.6, buf
 
 def get_end_times(start_times, duration, n_EV, cars):
     # calculate the end time based on how much needs to be charged
-    end_times = np.zeros(n_EV) + 1000
+    end_times = np.zeros(n_EV) + 10000
 
     end_times[cars] = start_times[cars] + duration[cars]
 
     return end_times
 
-def generate_EV_data(days, n_EV, start_dict, end_dict, charge_dict, garage_ids, home_ids, EVs_per_node):
+def generate_EV_data(days, n_EV, start_dict, end_dict, charge_dict, garage_ids, home_ids, EVs_per_node,
+                     charging_power):
     # calculate number of EVs
 
     # define GMM parameters
@@ -250,21 +269,25 @@ def generate_EV_data(days, n_EV, start_dict, end_dict, charge_dict, garage_ids, 
         final_soc = get_initial_soc(GMM_finallSoC, n_EV, cars)
 
         # Get charge and duration of charge
-        charge, duration = get_charge_duration(initial_soc, final_soc, n_EV, cars, t_res, power=3.6, buffer=1.5)
+        charge, duration = get_charge_duration(initial_soc, final_soc, n_EV, cars, t_res,
+                                               power=charging_power, buffer=1.5, future_charge_buffer=2.1)
 
         # Get start and end times
-        # replace cars=[0,1,4,5,6] to just cars after the above line is working
         start_times = get_start_times(GMM_start, n_EV, cars=cars)
         start_times = np.array(start_times * t_res, dtype=int)
         end_times = np.array(get_end_times(start_times, duration, n_EV, cars), dtype=int)
     
         # Divide the times in the start and end times arrays by 4 and round to the nearest whole number.
-        # start_times = np.array(start_times*t_res, dtype=int)
+        # start_times = np.array(start_times * t_res, dtype=int)
         # end_times = np.array(end_times * t_res, dtype=int)
+
+        #print('sum of charge', remove_invalid(charge))
+        #print('sum of charge', charge)
         
         # add the daily samples to dictionaries
-        start_dict, end_dict, charge_dict = assign_data_to_nodes(garage_ids, home_ids, EVs_per_node,
-                                                start_times, end_times, charge, start_dict, end_dict, charge_dict)
+        start_dict, end_dict, charge_dict = assign_data_to_nodes(garage_ids, home_ids, EVs_per_node, start_times,
+                                                                 end_times, charge, start_dict, end_dict, charge_dict,
+                                                                 fast_charge_buffer=3.1)
     # end for loop
 
     return start_dict, end_dict, charge_dict
@@ -273,8 +296,8 @@ def generate_EV_data(days, n_EV, start_dict, end_dict, charge_dict, garage_ids, 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate solar and storage demand data')
-    parser.add_argument('--storagePen', default=4, help='storage penetration percentage times 10')
-    parser.add_argument('--solarPen', default=6, help='solar penetration percentage times 10')
+    # parser.add_argument('--storagePen', default=4, help='storage penetration percentage times 10')
+    # parser.add_argument('--solarPen', default=6, help='solar penetration percentage times 10')
     parser.add_argument('--evPen', default=4, help='EV penetration percentage times 10')
 
     FLAGS, unparsed = parser.parse_known_args()
@@ -283,7 +306,7 @@ if __name__ == '__main__':
     # define EV penetration and info
     EV_pen = float(FLAGS.evPen) / 10
     max_capacity = 24  # kWh
-    charging_power = 3.6  # kW
+    charging_power = 40  # kW
 
     # define nodes and spot loads
     ppc = np.load('data/case123_ppc_reg_pq-0.79.npy', allow_pickle=True).item()
@@ -307,10 +330,10 @@ if __name__ == '__main__':
 
     # generate data
     start_dict, end_dict, charge_dict = generate_EV_data(days, n_EV, start_dict, end_dict, charge_dict,
-                                                         garage_ids, home_ids, EVs_per_node)
+                                                         garage_ids, home_ids, EVs_per_node, charging_power)
 
     np.savez('data/EV_charging_data'+str(EV_pen), start_dict=start_dict, end_dict=end_dict, charge_dict=charge_dict,
-             charging_power=charging_power, EV_pen=EV_pen)
+             charging_power=charging_power, EV_pen=EV_pen, garage_ids=garage_ids)
     print('saved data')
 
     """ # test loading of data
